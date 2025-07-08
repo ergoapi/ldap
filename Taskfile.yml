@@ -1,0 +1,38 @@
+# https://taskfile.dev
+
+version: '3'
+
+tasks:
+  gofmt:
+    cmds:
+      - go install golang.org/x/tools/cmd/goimports@latest
+      - gofmt -s -w .
+      - goimports -w .
+
+  govulncheck:
+    desc: vulnerability detection
+    cmds:
+      - go install golang.org/x/vuln/cmd/govulncheck@v1.1.1
+      - govulncheck ./...
+
+  gci:
+    cmds:
+      - go install github.com/daixiang0/gci@v0.13.1
+      - gci write --skip-generated --custom-order -s standard -s "prefix(github.com/ergoapi/ldap)" -s default -s blank -s dot .
+
+  gomod:
+    cmds:
+      - go mod tidy
+
+  fmt:
+    desc: format code
+    run: once
+    cmds:
+      - task: gomod
+      - task: gofmt
+      - task: gci
+      - task: govulncheck
+
+  default:
+    cmds:
+      - task: fmt
