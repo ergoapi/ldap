@@ -16,6 +16,7 @@ package ldap
 import (
 	"crypto/tls"
 	"fmt"
+	"net"
 	"net/url"
 	"strconv"
 	"strings"
@@ -189,10 +190,10 @@ func (ldapConfs LdapConf) SearchUser() ([]LdapUser, *goldap.SearchResult, error)
 	if err != nil {
 		return nil, nil, err
 	}
-	for ldapkey, ldapEntry := range result.Entries {
-		if ldapkey > 9 {
-			break
-		}
+	for _, ldapEntry := range result.Entries {
+		// if ldapkey > 9 {
+		// 	break
+		// }
 		var u LdapUser
 		for _, attr := range ldapEntry.Attributes {
 			val := attr.Values[0]
@@ -222,23 +223,17 @@ func (ldapConfs LdapConf) SearchUser() ([]LdapUser, *goldap.SearchResult, error)
 }
 
 func (ldapConfs LdapConf) dialLDAP() (*goldap.Conn, error) {
-	var err error
-	var ldap *goldap.Conn
-	splitLdapURL := strings.Split(ldapConfs.LdapURL, "://")
-	protocol, hostport := splitLdapURL[0], splitLdapURL[1]
-
-	// Sets a Dial Timeout for LDAP
-	connectionTimeout := ldapConfs.LdapConnectionTimeout
-	goldap.DefaultTimeout = time.Duration(connectionTimeout) * time.Second
-
-	switch protocol {
-	case "ldap":
-		ldap, err = goldap.Dial("tcp", hostport)
-	case "ldaps":
-		ldap, err = goldap.DialTLS("tcp", hostport, &tls.Config{InsecureSkipVerify: true})
+	dialOptions := []goldap.DialOpt{
+		goldap.DialWithDialer(&net.Dialer{
+			Timeout: time.Duration(ldapConfs.LdapConnectionTimeout) * time.Second,
+		}),
+	}
+	if strings.HasPrefix(ldapConfs.LdapURL, "ldaps://") {
+		// 保持现有 LDAPS 兼容行为，避免本次 API 迁移改变证书校验策略。
+		dialOptions = append(dialOptions, goldap.DialWithTLSConfig(&tls.Config{InsecureSkipVerify: true}))
 	}
 
-	return ldap, err
+	return goldap.DialURL(ldapConfs.LdapURL, dialOptions...)
 }
 
 func (ldapConfs LdapConf) bindLDAPSearchDN(ldap *goldap.Conn) error {
@@ -340,7 +335,14 @@ func (ldapConfs LdapConf) Search(username string) []LdapUser {
 		return nil
 	}
 
-	ldapConfs.LdapFilter = makeFilter(fmt.Sprintf("%v*", username), ldapConfs.LdapFilter, ldapConfs.LdapUID)
+	filterUID := ldapConfs.LdapUID
+	filterValue := fmt.Sprintf("%v*", username)
+	if strings.Contains(username, "@") {
+		// 邮箱必须精确匹配，避免将完整邮箱错误地作为账号前缀查询。
+		filterUID = "mail"
+		filterValue = username
+	}
+	ldapConfs.LdapFilter = makeFilter(filterValue, ldapConfs.LdapFilter, filterUID)
 
 	ldapUsers, _, err := ldapConfs.SearchUser()
 
